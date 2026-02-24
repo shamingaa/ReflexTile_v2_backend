@@ -1,0 +1,84 @@
+const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
+require('dotenv').config();
+
+const { DataTypes }           = require('sequelize');
+const { connect, sequelize }  = require('./db');
+const scoreRoutes     = require('./routes/scores');
+const analyticsRoutes = require('./routes/analytics');
+
+const app = express();
+
+const allowedOrigins = (process.env.CORS_ORIGIN || '*')
+  .split(',')
+  .map((s) => s.trim());
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true); // allow mobile apps / curl
+      if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      console.warn(`Blocked CORS origin: ${origin}`);
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+  })
+);
+app.use(express.json());
+app.use(morgan('dev'));
+
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', now: new Date().toISOString() });
+});
+
+app.use('/api/scores',    scoreRoutes);
+app.use('/api/analytics', analyticsRoutes);
+
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled error', err);
+  res.status(500).json({ error: 'Server error' });
+});
+
+const port = process.env.PORT || 4000;
+
+// Explicitly add new columns to existing tables — safer than alter:true with ENUMs
+const runMigrations = async () => {
+  const qi = sequelize.getQueryInterface();
+  try {
+    const cols = await qi.describeTable('scores');
+    if (!cols.contact) {
+      await qi.addColumn('scores', 'contact', {
+        type: DataTypes.STRING(128),
+        allowNull: true,
+        defaultValue: null,
+      });
+      console.log('[migration] Added contact column to scores');
+    }
+  } catch (err) {
+    // Table doesn't exist yet — sync() will create it with the column already defined
+    console.log('[migration] scores table not ready, skipping:', err.message);
+  }
+};
+
+const start = async () => {
+  try {
+    await connect();
+    const syncOnBoot = process.env.SYNC_ON_BOOT !== 'false';
+    if (syncOnBoot) {
+      await sequelize.sync();    // creates new tables (logo_taps etc.)
+      await runMigrations();     // adds new columns to existing tables
+      console.log('Database synced');
+    }
+    app.listen(port, () => {
+      console.log(`Arcade Arena server running on http://localhost:${port}`);
+    });
+  } catch (err) {
+    console.error('Failed to start server', err);
+    process.exit(1);
+  }
+};
+
+start();
