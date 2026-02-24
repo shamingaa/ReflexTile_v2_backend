@@ -29,7 +29,7 @@ router.get('/', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000);
     const { mode, period } = req.query;
-    const where = {};
+    const where = { score: { [Op.gt]: 0 } };
 
     if (mode && ['solo', 'versus'].includes(mode)) {
       where.mode = mode;
@@ -70,6 +70,60 @@ router.get('/recent', async (_req, res) => {
   }
 });
 
+// ── POST /api/scores/register ──────────────────────────────────────────────
+// Registers a player immediately on name entry (score = 0 placeholder).
+// Called before a game is played so the admin sees all sign-ups in the DB.
+router.post('/register', async (req, res) => {
+  const { playerName, deviceId, contact } = req.body || {};
+  try {
+    if (!playerName || typeof playerName !== 'string' || playerName.trim().length === 0) {
+      return res.status(400).json({ error: 'playerName is required' });
+    }
+    if (!deviceId || typeof deviceId !== 'string' || deviceId.trim().length === 0) {
+      return res.status(400).json({ error: 'deviceId is required' });
+    }
+
+    const normalizedName    = playerName.trim().slice(0, 32);
+    const id                = deviceId.trim().slice(0, 64);
+    const normalizedContact = contact ? String(contact).trim().slice(0, 128) : null;
+
+    // Check if the name is already taken by a different device
+    const taken = await Score.findOne({ where: { playerName: normalizedName } });
+    if (taken && taken.deviceId !== id) {
+      return res.status(409).json({ error: 'name_taken' });
+    }
+
+    // Check if the contact is already used by a different device
+    if (normalizedContact) {
+      const contactTaken = await Score.findOne({ where: { contact: normalizedContact } });
+      if (contactTaken && contactTaken.deviceId !== id) {
+        return res.status(409).json({ error: 'contact_taken' });
+      }
+    }
+
+    // Update any existing record for this device, or create a placeholder
+    const existing = await Score.findOne({ where: { deviceId: id } });
+    if (existing) {
+      const updates = { playerName: normalizedName };
+      if (normalizedContact !== null) updates.contact = normalizedContact;
+      const updated = await existing.update(updates);
+      return res.json(updated);
+    }
+
+    const created = await Score.create({
+      deviceId:   id,
+      playerName: normalizedName,
+      score:      0,
+      mode:       'solo',
+      contact:    normalizedContact,
+    });
+    res.status(201).json(created);
+  } catch (err) {
+    console.error('Failed to register player', err);
+    res.status(500).json({ error: 'Failed to register player' });
+  }
+});
+
 // ── POST /api/scores ───────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
   const { playerName, score, mode, deviceId, contact } = req.body || {};
@@ -102,6 +156,14 @@ router.post('/', async (req, res) => {
     const taken = await Score.findOne({ where: { playerName: normalizedName } });
     if (taken && taken.deviceId !== id) {
       return res.status(409).json({ error: 'name_taken' });
+    }
+
+    // Check if the contact is already used by a different device
+    if (normalizedContact) {
+      const contactTaken = await Score.findOne({ where: { contact: normalizedContact } });
+      if (contactTaken && contactTaken.deviceId !== id) {
+        return res.status(409).json({ error: 'contact_taken' });
+      }
     }
 
     const existing = await Score.findOne({ where: { deviceId: id, mode: normalizedMode } });

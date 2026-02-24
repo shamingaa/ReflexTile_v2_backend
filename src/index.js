@@ -7,6 +7,7 @@ const { DataTypes }           = require('sequelize');
 const { connect, sequelize }  = require('./db');
 const scoreRoutes     = require('./routes/scores');
 const analyticsRoutes = require('./routes/analytics');
+const adminRoutes     = require('./routes/admin');
 
 const app = express();
 
@@ -36,6 +37,7 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/scores',    scoreRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/admin',         adminRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error', err);
