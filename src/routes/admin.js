@@ -1,5 +1,5 @@
 const express  = require('express');
-const { Score, LogoTap } = require('../db');
+const { Score, LogoTap, sequelize } = require('../db');
 
 const router = express.Router();
 
@@ -38,7 +38,25 @@ router.get('/', async (_req, res) => {
     const topScore          = players[0]?.score ?? 0;
     const totalTaps         = Object.values(tapTotals).reduce((s, v) => s + v, 0);
 
-    res.send(html({ players, tapTotals, totalPlayers, withContact, avgScore, topScore, totalTaps }));
+    // Top tappers via raw join
+    let topTappers = [];
+    try {
+      const [rows] = await sequelize.query(`
+        SELECT
+          MAX(s.player_name) AS playerName,
+          SUM(lt.taps) AS totalTaps,
+          SUM(CASE WHEN lt.brand = 'Tuberway' THEN lt.taps ELSE 0 END) AS tuberwayTaps,
+          SUM(CASE WHEN lt.brand = '1Percent' THEN lt.taps ELSE 0 END) AS percentTaps
+        FROM logo_taps lt
+        INNER JOIN scores s ON lt.device_id = s.device_id
+        GROUP BY lt.device_id
+        ORDER BY totalTaps DESC
+        LIMIT 20
+      `);
+      topTappers = rows;
+    } catch { /* non-fatal */ }
+
+    res.send(html({ players, tapTotals, topTappers, totalPlayers, withContact, avgScore, topScore, totalTaps }));
   } catch (err) {
     res.status(500).send(`<pre>Error: ${err.message}</pre>`);
   }
@@ -69,7 +87,7 @@ router.get('/export', async (_req, res) => {
 });
 
 // ── HTML template ─────────────────────────────────────────────────────────
-function html({ players, tapTotals, totalPlayers, withContact, avgScore, topScore, totalTaps }) {
+function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgScore, topScore, totalTaps }) {
   const medal = (i) => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
 
   const rows = players.map((p, i) => `
@@ -81,6 +99,17 @@ function html({ players, tapTotals, totalPlayers, withContact, avgScore, topScor
       <td><span class="mode-badge mode-${p.mode}">${p.mode}</span></td>
       <td class="muted">${new Date(p.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
       <td class="muted device">${p.deviceId.slice(0, 8)}…</td>
+    </tr>`).join('');
+
+  const tapMedal = (i) => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+
+  const tapperRows = topTappers.map((t, i) => `
+    <tr class="${i < 3 ? 'tap-top3' : ''}">
+      <td class="tap-rank">${tapMedal(i)}</td>
+      <td class="tap-name">${esc(t.playerName)}</td>
+      <td class="tap-total">${Number(t.totalTaps).toLocaleString()}</td>
+      <td class="tap-tube">${Number(t.tuberwayTaps).toLocaleString()}</td>
+      <td class="tap-pct">${Number(t.percentTaps).toLocaleString()}</td>
     </tr>`).join('');
 
   const brandCards = ['Tuberway', '1Percent'].map((brand) => `
@@ -178,6 +207,19 @@ function html({ players, tapTotals, totalPlayers, withContact, avgScore, topScor
     .mode-solo   { background: rgba(90,209,255,0.1); color: var(--accent2); }
     .mode-versus { background: rgba(255,95,109,0.1); color: #ff5f6d; }
 
+    /* ── Tap leaderboard ── */
+    .tap-table { width: 100%; border-collapse: collapse; }
+    .tap-table th { text-align: left; padding: 10px 16px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--border); }
+    .tap-table td { padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; font-size: 13px; }
+    .tap-table tr:last-child td { border-bottom: none; }
+    .tap-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .tap-table .tap-rank { color: var(--muted); font-size: 13px; font-weight: 700; min-width: 36px; }
+    .tap-table .tap-name { font-weight: 700; font-size: 14px; }
+    .tap-table .tap-total { font-weight: 800; color: var(--accent2); font-variant-numeric: tabular-nums; font-size: 15px; }
+    .tap-table .tap-tube  { color: #5ad1ff; font-variant-numeric: tabular-nums; }
+    .tap-table .tap-pct   { color: var(--accent); font-variant-numeric: tabular-nums; }
+    .tap-table tr.tap-top3 .tap-rank { font-size: 18px; }
+
     /* ── Footer ── */
     .footer { margin-top: 40px; text-align: center; font-size: 12px; color: var(--muted); }
   </style>
@@ -229,6 +271,28 @@ function html({ players, tapTotals, totalPlayers, withContact, avgScore, topScor
       <div class="brand-row">
         ${brandCards}
       </div>
+    </div>
+
+    <!-- Tap Champions -->
+    <div class="section">
+      <p class="section-title">Tap Champions — Most Sponsor Tiles Tapped</p>
+      ${topTappers.length === 0 ? '<p style="color:var(--muted);font-size:13px;">No tap data yet.</p>' : `
+      <div class="table-wrap">
+        <div style="overflow-x:auto">
+          <table class="tap-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Player</th>
+                <th>Total Taps</th>
+                <th>Tuberway</th>
+                <th>1Percent</th>
+              </tr>
+            </thead>
+            <tbody>${tapperRows}</tbody>
+          </table>
+        </div>
+      </div>`}
     </div>
 
     <!-- Players table -->

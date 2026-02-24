@@ -1,5 +1,5 @@
 const express   = require('express');
-const { LogoTap } = require('../db');
+const { LogoTap, sequelize } = require('../db');
 
 const router = express.Router();
 
@@ -38,6 +38,29 @@ router.get('/logo', async (_req, res) => {
   } catch (err) {
     console.error('Failed to get taps', err);
     res.status(500).json({ error: 'Failed to get taps' });
+  }
+});
+
+// ── GET /api/analytics/logo/leaderboard ─────────────────────────────────────
+// Returns top 20 players ranked by total sponsor tile taps
+router.get('/logo/leaderboard', async (_req, res) => {
+  try {
+    const [rows] = await sequelize.query(`
+      SELECT
+        MAX(s.player_name)                                                   AS playerName,
+        SUM(lt.taps)                                                         AS totalTaps,
+        SUM(CASE WHEN lt.brand = 'Tuberway' THEN lt.taps ELSE 0 END)        AS tuberwayTaps,
+        SUM(CASE WHEN lt.brand = '1Percent' THEN lt.taps ELSE 0 END)        AS percentTaps
+      FROM logo_taps lt
+      INNER JOIN scores s ON lt.device_id = s.device_id
+      GROUP BY lt.device_id
+      ORDER BY totalTaps DESC
+      LIMIT 20
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('Failed to load tap leaderboard', err);
+    res.status(500).json({ error: 'Failed to load tap leaderboard' });
   }
 });
 
