@@ -31,6 +31,11 @@ module.exports = (sequelize) => {
         allowNull: true,
         defaultValue: null,
       },
+      playCount: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
     },
     {
       tableName: 'scores',

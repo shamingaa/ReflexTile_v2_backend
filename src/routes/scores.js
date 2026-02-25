@@ -15,7 +15,7 @@ function isRateLimited(deviceId) {
   lastSubmit.set(deviceId, now);
   // Prune old entries every 500 submissions
   if (lastSubmit.size > 500) {
-    const cutoff = now - 60_000;
+    const cutoff = now - RATE_LIMIT_MS - 5_000;
     for (const [k, v] of lastSubmit) { if (v < cutoff) lastSubmit.delete(k); }
   }
   return false;
@@ -85,20 +85,6 @@ router.get('/', async (req, res) => {
     res.json(scores);
   } catch (err) {
     console.error('Failed to list scores', err);
-    res.status(500).json({ error: 'Failed to load scores' });
-  }
-});
-
-// ── GET /api/scores/recent ─────────────────────────────────────────────────
-router.get('/recent', async (_req, res) => {
-  try {
-    const scores = await Score.findAll({
-      order: [['created_at', 'DESC']],
-      limit: 20,
-    });
-    res.json(scores);
-  } catch (err) {
-    console.error('Failed to list recent scores', err);
     res.status(500).json({ error: 'Failed to load scores' });
   }
 });
@@ -210,14 +196,15 @@ router.post('/', async (req, res) => {
       }
       return res.status(403).json({ error: 'session_used' });
     }
-    // Consume the session (single-use)
-    session.usedAt = now;
-    sessionStore.set(sessionId, session);
     // ─────────────────────────────────────────────────────────────────────
 
     if (isRateLimited(id)) {
       return res.status(429).json({ error: 'Too many requests — wait a moment.' });
     }
+    // Consume the session (single-use) — done after rate-limit check so a
+    // rate-limited rejection does not burn the token.
+    session.usedAt = now;
+    sessionStore.set(sessionId, session);
 
     // Check if this name is already claimed by a different device
     const taken = await Score.findOne({ where: { playerName: normalizedName } });
@@ -238,8 +225,9 @@ router.post('/', async (req, res) => {
     if (existing) {
       const newHigh = Math.max(existing.score, Math.round(score));
       const updated = await existing.update({
-        score: newHigh,
+        score:      newHigh,
         playerName: normalizedName,
+        playCount:  (existing.playCount || 0) + 1,
         ...(normalizedContact !== null && { contact: normalizedContact }),
       });
       return res.json(updated);
@@ -251,6 +239,7 @@ router.post('/', async (req, res) => {
       score:      Math.round(score),
       mode:       normalizedMode,
       contact:    normalizedContact,
+      playCount:  1,
     });
     res.status(201).json(created);
   } catch (err) {

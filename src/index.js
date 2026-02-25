@@ -59,6 +59,14 @@ const runMigrations = async () => {
       });
       console.log('[migration] Added contact column to scores');
     }
+    if (!cols.play_count) {
+      await qi.addColumn('scores', 'play_count', {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      });
+      console.log('[migration] Added play_count column to scores');
+    }
   } catch (err) {
     // Table doesn't exist yet — sync() will create it with the column already defined
     console.log('[migration] scores table not ready, skipping:', err.message);

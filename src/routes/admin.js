@@ -33,10 +33,14 @@ router.get('/', async (_req, res) => {
 
     const totalPlayers      = players.length;
     const withContact       = players.filter((p) => p.contact).length;
-    const avgScore          = totalPlayers > 0
-      ? Math.round(players.reduce((s, p) => s + p.score, 0) / totalPlayers) : 0;
+    const playedPlayers     = players.filter((p) => p.score > 0);
+    const avgScore          = playedPlayers.length > 0
+      ? Math.round(playedPlayers.reduce((s, p) => s + p.score, 0) / playedPlayers.length) : 0;
     const topScore          = players[0]?.score ?? 0;
     const totalTaps         = Object.values(tapTotals).reduce((s, v) => s + v, 0);
+    const totalPlays        = players.reduce((s, p) => s + (p.playCount || 0), 0);
+    const avgPlays          = totalPlayers > 0
+      ? Math.round((totalPlays / totalPlayers) * 10) / 10 : 0;
 
     // Top tappers via raw join
     let topTappers = [];
@@ -56,7 +60,7 @@ router.get('/', async (_req, res) => {
       topTappers = rows;
     } catch { /* non-fatal */ }
 
-    res.send(html({ players, tapTotals, topTappers, totalPlayers, withContact, avgScore, topScore, totalTaps }));
+    res.send(html({ players, tapTotals, topTappers, totalPlayers, withContact, avgScore, topScore, totalTaps, totalPlays, avgPlays }));
   } catch (err) {
     res.status(500).send(`<pre>Error: ${err.message}</pre>`);
   }
@@ -66,20 +70,23 @@ router.get('/', async (_req, res) => {
 router.get('/export', async (_req, res) => {
   try {
     const players = await Score.findAll({ order: [['score', 'DESC']] });
+    // csvEsc: wraps in quotes and escapes internal quotes per RFC 4180
+    const csvEsc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
     const rows = [
-      ['Rank', 'Player', 'Score', 'Contact', 'Mode', 'Device ID', 'Joined'].join(','),
+      ['Rank', 'Player', 'Score', 'Plays', 'Contact', 'Mode', 'Device ID', 'Joined'].join(','),
       ...players.map((p, i) => [
         i + 1,
-        `"${p.playerName}"`,
+        csvEsc(p.playerName),
         p.score,
-        `"${p.contact || ''}"`,
+        p.playCount || 0,
+        csvEsc(p.contact || ''),
         p.mode,
-        `"${p.deviceId}"`,
-        `"${new Date(p.createdAt).toISOString()}"`,
+        csvEsc(p.deviceId),
+        csvEsc(new Date(p.createdAt).toISOString()),
       ].join(',')),
     ];
     res.set('Content-Type', 'text/csv');
-    res.set('Content-Disposition', 'attachment; filename="arcade-arena-players.csv"');
+    res.set('Content-Disposition', 'attachment; filename="reflex-tile-players.csv"');
     res.send(rows.join('\n'));
   } catch (err) {
     res.status(500).send('Export failed: ' + err.message);
@@ -87,7 +94,7 @@ router.get('/export', async (_req, res) => {
 });
 
 // ── HTML template ─────────────────────────────────────────────────────────
-function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgScore, topScore, totalTaps }) {
+function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgScore, topScore, totalTaps, totalPlays, avgPlays }) {
   const medal = (i) => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
 
   const rows = players.map((p, i) => `
@@ -95,6 +102,7 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
       <td class="rank">${medal(i)}</td>
       <td class="name">${esc(p.playerName)}</td>
       <td class="score">${p.score.toLocaleString()}</td>
+      <td class="plays">${(p.playCount || 0).toLocaleString()}</td>
       <td class="contact">${p.contact ? `<span class="contact-tag">${esc(p.contact)}</span>` : '<span class="no-contact">—</span>'}</td>
       <td><span class="mode-badge mode-${p.mode}">${p.mode}</span></td>
       <td class="muted">${new Date(p.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
@@ -201,6 +209,7 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
     td.score { font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; font-size: 15px; }
     td.muted { color: var(--muted); font-size: 12px; }
     td.device { font-family: monospace; font-size: 11px; }
+    td.plays { font-variant-numeric: tabular-nums; color: var(--accent2); font-weight: 700; }
     .contact-tag { background: rgba(124,243,197,0.1); color: var(--accent); border: 1px solid rgba(124,243,197,0.25); border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 600; }
     .no-contact  { color: var(--muted); }
     .mode-badge  { padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -257,11 +266,22 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
       <div class="stat-card">
         <p class="stat-label">Avg Score</p>
         <p class="stat-value">${avgScore.toLocaleString()}</p>
+        <p class="stat-sub">players who have played</p>
       </div>
       <div class="stat-card">
         <p class="stat-label">Logo Taps</p>
         <p class="stat-value">${totalTaps.toLocaleString()}</p>
         <p class="stat-sub">across all sponsors</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-label">Total Plays</p>
+        <p class="stat-value">${totalPlays.toLocaleString()}</p>
+        <p class="stat-sub">all game sessions</p>
+      </div>
+      <div class="stat-card">
+        <p class="stat-label">Avg Games / Player</p>
+        <p class="stat-value">${avgPlays.toLocaleString()}</p>
+        <p class="stat-sub">per registered player</p>
       </div>
     </div>
 
@@ -310,6 +330,7 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
                 <th>#</th>
                 <th>Player</th>
                 <th>Score</th>
+                <th>Plays</th>
                 <th>Contact</th>
                 <th>Mode</th>
                 <th>Joined</th>
