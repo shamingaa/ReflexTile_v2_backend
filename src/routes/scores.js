@@ -1,7 +1,8 @@
-const express  = require('express');
-const crypto   = require('crypto');
-const { Op }   = require('sequelize');
-const { Score } = require('../db');
+const express      = require('express');
+const crypto       = require('crypto');
+const { Op }       = require('sequelize');
+const { Score }    = require('../db');
+const competition  = require('../competition');
 
 const router = express.Router();
 
@@ -145,7 +146,7 @@ router.post('/register', async (req, res) => {
 
 // ── POST /api/scores ───────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { playerName, score, mode, deviceId, contact, sessionId } = req.body || {};
+  const { playerName, score, mode, deviceId, contact, sessionId, hits, fastestHit, avgReaction, reactionSD } = req.body || {};
   try {
     if (!playerName || typeof playerName !== 'string' || playerName.trim().length === 0) {
       return res.status(400).json({ error: 'playerName is required' });
@@ -198,6 +199,12 @@ router.post('/', async (req, res) => {
     }
     // ─────────────────────────────────────────────────────────────────────
 
+    // ── Competition gate ───────────────────────────────────────────────────
+    if (!competition.getState().open) {
+      console.log(`[competition] Score blocked — competition closed (device ${id.slice(0, 8)})`);
+      return res.status(503).json({ error: 'competition_closed' });
+    }
+
     if (isRateLimited(id)) {
       return res.status(429).json({ error: 'Too many requests — wait a moment.' });
     }
@@ -205,6 +212,46 @@ router.post('/', async (req, res) => {
     // rate-limited rejection does not burn the token.
     session.usedAt = now;
     sessionStore.set(sessionId, session);
+
+    // ── Anti-cheat: game integrity checks ─────────────────────────────────
+    // 1. Minimum game duration (server-side timestamps — cannot be forged by client).
+    //    Session is minted during the GO! pause (~650ms before game start).
+    //    Floor is 5s: blocks instant API injection (elapsed ~200ms) while allowing
+    //    the fastest legitimate game (~7.5s when miss penalties drain the timer).
+    const elapsed = now - session.issuedAt;
+    if (elapsed < 5_000) {
+      console.warn(`[anti-cheat] Rejected — game too short (${elapsed}ms) from device ${id.slice(0, 8)}`);
+      return res.status(403).json({ error: 'score_invalid' });
+    }
+    // 2. Superhuman fastest hit — 100ms is the absolute human reaction floor.
+    //    Sub-100ms consistently = script tapping.
+    if (typeof fastestHit === 'number' && fastestHit < 100) {
+      console.warn(`[anti-cheat] Rejected — superhuman fastest hit ${fastestHit}ms from device ${id.slice(0, 8)}`);
+      return res.status(403).json({ error: 'score_invalid' });
+    }
+    // 3. Bot-like average reaction — even elite humans average ≥ 180ms.
+    //    Consistent sub-150ms average indicates automated input.
+    if (typeof avgReaction === 'number' && avgReaction < 150) {
+      console.warn(`[anti-cheat] Rejected — bot-like avg reaction ${avgReaction}ms from device ${id.slice(0, 8)}`);
+      return res.status(403).json({ error: 'score_invalid' });
+    }
+    // 4. Impossible hit rate — min tile duration is 580ms so hits can't exceed
+    //    elapsed / 450ms (450ms is a generous floor with buffer for timing variance).
+    //    elapsed uses server-side timestamps and cannot be forged.
+    if (typeof hits === 'number' && hits > Math.ceil(elapsed / 450)) {
+      console.warn(`[anti-cheat] Rejected — impossible hit rate (${hits} hits in ${elapsed}ms) from device ${id.slice(0, 8)}`);
+      return res.status(403).json({ error: 'score_invalid' });
+    }
+    // 5. Unnaturally consistent reaction times — bot-like SD.
+    //    A bot sleeping a fixed interval has SD < 5ms; one with random jitter up
+    //    to ±50ms has SD ≈ 14ms. Humans never sustain SD < 20ms over 15+ hits.
+    //    Requires ≥ 15 hits — small samples produce unreliably low SD readings
+    //    even for real players having a focused burst.
+    if (typeof reactionSD === 'number' && hits >= 15 && reactionSD < 20) {
+      console.warn(`[anti-cheat] Rejected — reaction SD too low (${reactionSD}ms, ${hits} hits) from device ${id.slice(0, 8)}`);
+      return res.status(403).json({ error: 'score_invalid' });
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     // Check if this name is already claimed by a different device
     const taken = await Score.findOne({ where: { playerName: normalizedName } });

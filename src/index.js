@@ -8,6 +8,7 @@ const { connect, sequelize }  = require('./db');
 const scoreRoutes     = require('./routes/scores');
 const analyticsRoutes = require('./routes/analytics');
 const adminRoutes     = require('./routes/admin');
+const competition     = require('./competition');
 
 const app = express();
 
@@ -15,29 +16,35 @@ const allowedOrigins = (process.env.CORS_ORIGIN || '*')
   .split(',')
   .map((s) => s.trim());
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true); // allow mobile apps / curl
-      if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      console.warn(`Blocked CORS origin: ${origin}`);
-      return callback(new Error('Not allowed by CORS'));
-    },
-    credentials: true,
-  })
-);
+const corsMiddleware = cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // allow mobile apps / curl
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    console.warn(`Blocked CORS origin: ${origin}`);
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+});
+
 app.use(express.json());
 app.use(morgan('dev'));
+
+// Admin routes are same-origin server-rendered pages — no CORS needed.
+// API routes are called cross-origin from the client — CORS required.
+app.use('/admin', adminRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', now: new Date().toISOString() });
 });
 
-app.use('/api/scores',    scoreRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/admin',         adminRoutes);
+app.get('/api/competition', corsMiddleware, (_req, res) => {
+  res.json(competition.getState());
+});
+
+app.use('/api/scores',    corsMiddleware, scoreRoutes);
+app.use('/api/analytics', corsMiddleware, analyticsRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error', err);
