@@ -10,13 +10,13 @@ router.use((req, res, next) => {
   const header    = req.headers.authorization || '';
 
   if (!header.startsWith('Basic ')) {
-    res.set('WWW-Authenticate', 'Basic realm="Arcade Arena Admin"');
+    res.set('WWW-Authenticate', 'Basic realm="Reflex Tile Admin"');
     return res.status(401).send('Authentication required');
   }
 
   const [user, pass] = Buffer.from(header.slice(6), 'base64').toString().split(':');
   if (user !== validUser || pass !== validPass) {
-    res.set('WWW-Authenticate', 'Basic realm="Arcade Arena Admin"');
+    res.set('WWW-Authenticate', 'Basic realm="Reflex Tile Admin"');
     return res.status(401).send('Invalid credentials');
   }
   next();
@@ -124,7 +124,7 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Arcade Arena — Admin</title>
+  <title>Reflex Tile — Admin</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -231,7 +231,7 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
     <div class="header">
       <div class="header-left">
         <p class="eyebrow">Competition Dashboard</p>
-        <h1>Arcade Arena Admin</h1>
+        <h1>Reflex Tile Admin</h1>
       </div>
       <div class="header-right">
         <button class="btn btn-ghost" onclick="location.reload()">↻ Refresh</button>
@@ -324,7 +324,7 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
       </div>
     </div>
 
-    <p class="footer">Arcade Arena Admin &nbsp;·&nbsp; Powered by Tuberway &amp; 1Percent &nbsp;·&nbsp; ${new Date().toLocaleString()}</p>
+    <p class="footer">Reflex Tile Admin &nbsp;·&nbsp; Powered by Tuberway &amp; 1Percent &nbsp;·&nbsp; ${new Date().toLocaleString()}</p>
   </div>
 
   <script>

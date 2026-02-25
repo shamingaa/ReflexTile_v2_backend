@@ -1,4 +1,5 @@
-const express = require('express');
+const express  = require('express');
+const crypto   = require('crypto');
 const { Op }   = require('sequelize');
 const { Score } = require('../db');
 
@@ -6,7 +7,7 @@ const router = express.Router();
 
 // ── Simple in-memory rate limiter: max 1 submission per device per 5s ────────
 const lastSubmit = new Map();
-const RATE_LIMIT_MS = 5_000;
+const RATE_LIMIT_MS = 25_000; // min real game duration ≈ 28s
 function isRateLimited(deviceId) {
   const now  = Date.now();
   const last = lastSubmit.get(deviceId) || 0;
@@ -19,6 +20,38 @@ function isRateLimited(deviceId) {
   }
   return false;
 }
+
+// ── Game session store ───────────────────────────────────────────────────────
+// A session token is minted server-side when each game starts and consumed
+// (single-use) when the score is submitted. This prevents:
+//   • Forged scores injected directly into the API
+//   • Scores injected into the localStorage offline queue
+//   • Replaying old submissions
+const SESSION_TTL   = 30 * 60 * 1000; // 30 min — covers offline queue drain window
+const SESSION_GRACE =  2 * 60 * 1000; //  2 min — idempotent-retry window after use
+
+const sessionStore = new Map(); // sessionId → { deviceId, issuedAt, usedAt }
+
+// Prune expired sessions every 10 minutes
+setInterval(() => {
+  const cutoff = Date.now() - SESSION_TTL - SESSION_GRACE;
+  for (const [id, s] of sessionStore) {
+    if (s.issuedAt < cutoff) sessionStore.delete(id);
+  }
+}, 10 * 60 * 1000);
+
+// ── POST /api/scores/session ───────────────────────────────────────────────
+// Called by the client at game-start. Returns a one-time session token.
+router.post('/session', (req, res) => {
+  const { deviceId } = req.body || {};
+  if (!deviceId || typeof deviceId !== 'string') {
+    return res.status(400).json({ error: 'deviceId required' });
+  }
+  const id        = deviceId.trim().slice(0, 64);
+  const sessionId = crypto.randomBytes(16).toString('hex');
+  sessionStore.set(sessionId, { deviceId: id, issuedAt: Date.now(), usedAt: null });
+  res.json({ sessionId });
+});
 
 // ── GET /api/scores ────────────────────────────────────────────────────────
 // Query params:
@@ -126,7 +159,7 @@ router.post('/register', async (req, res) => {
 
 // ── POST /api/scores ───────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { playerName, score, mode, deviceId, contact } = req.body || {};
+  const { playerName, score, mode, deviceId, contact, sessionId } = req.body || {};
   try {
     if (!playerName || typeof playerName !== 'string' || playerName.trim().length === 0) {
       return res.status(400).json({ error: 'playerName is required' });
@@ -147,6 +180,40 @@ router.post('/', async (req, res) => {
     const normalizedMode    = mode === 'versus' ? 'versus' : 'solo';
     const id                = deviceId.trim().slice(0, 64);
     const normalizedContact = contact ? String(contact).trim().slice(0, 128) : null;
+
+    // ── Session token validation ───────────────────────────────────────────
+    // Every legitimate score comes with a server-issued one-time token.
+    if (!sessionId || typeof sessionId !== 'string') {
+      console.warn(`[security] Score rejected — no session token from device ${id.slice(0, 8)}`);
+      return res.status(403).json({ error: 'session_required' });
+    }
+    const session = sessionStore.get(sessionId);
+    if (!session) {
+      console.warn(`[security] Score rejected — unknown session from device ${id.slice(0, 8)}`);
+      return res.status(403).json({ error: 'session_invalid' });
+    }
+    if (session.deviceId !== id) {
+      console.warn(`[security] Score rejected — session device mismatch (${id.slice(0, 8)})`);
+      return res.status(403).json({ error: 'session_device_mismatch' });
+    }
+    const now = Date.now();
+    if (now - session.issuedAt > SESSION_TTL) {
+      sessionStore.delete(sessionId);
+      return res.status(403).json({ error: 'session_expired' });
+    }
+    if (session.usedAt) {
+      // Grace period: if the same device retries within 2 min (e.g. response was lost),
+      // return the current DB record so the client considers it done.
+      if (now - session.usedAt < SESSION_GRACE) {
+        const existing = await Score.findOne({ where: { deviceId: id } });
+        return existing ? res.json(existing) : res.json({ ok: true, reused: true });
+      }
+      return res.status(403).json({ error: 'session_used' });
+    }
+    // Consume the session (single-use)
+    session.usedAt = now;
+    sessionStore.set(sessionId, session);
+    // ─────────────────────────────────────────────────────────────────────
 
     if (isRateLimited(id)) {
       return res.status(429).json({ error: 'Too many requests — wait a moment.' });

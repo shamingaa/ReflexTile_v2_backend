@@ -4,9 +4,10 @@ const { LogoTap, sequelize } = require('../db');
 const router = express.Router();
 
 // ── POST /api/analytics/logo ────────────────────────────────────────────────
-// Body: { brand, deviceId, event: 'tap' }
+// Body: { brand, deviceId, taps: N }   — idempotent: sets to MAX(existing, N)
+// Legacy body: { brand, deviceId, event: 'tap' } — still increments by 1
 router.post('/logo', async (req, res) => {
-  const { brand, deviceId } = req.body || {};
+  const { brand, deviceId, taps } = req.body || {};
   if (!brand || typeof brand !== 'string') {
     return res.status(400).json({ error: 'brand is required' });
   }
@@ -17,7 +18,13 @@ router.post('/logo', async (req, res) => {
       where:    { brand: normalizedBrand, deviceId: normalizedDeviceId },
       defaults: { taps: 0 },
     });
-    await record.increment('taps');
+    if (typeof taps === 'number' && taps > 0) {
+      // Idempotent upsert: safe to retry — won't double-count
+      if (record.taps < taps) await record.update({ taps });
+    } else {
+      // Legacy increment (backward compat)
+      await record.increment('taps');
+    }
     res.json({ ok: true });
   } catch (err) {
     console.error('Failed to log tap', err);

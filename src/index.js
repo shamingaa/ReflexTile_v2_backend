@@ -75,7 +75,7 @@ const start = async () => {
       console.log('Database synced');
     }
     app.listen(port, () => {
-      console.log(`Arcade Arena server running on http://localhost:${port}`);
+      console.log(`Reflex Tile server running on http://localhost:${port}`);
     });
   } catch (err) {
     console.error('Failed to start server', err);
