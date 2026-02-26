@@ -128,7 +128,9 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
       <td class="name">${esc(p.playerName)}</td>
       <td class="score">${p.score.toLocaleString()}</td>
       <td class="plays">${(p.playCount || 0).toLocaleString()}</td>
-      <td>${p.contact ? `<span class="contact-tag">${esc(p.contact)}</span>` : '<span class="no-contact">—</span>'}</td>
+      <td>${p.contact
+        ? `<div class="contact-cell"><span class="contact-tag">${esc(p.contact)}</span><button class="copy-btn" onclick="copyContact(${JSON.stringify(p.contact)},this)">Copy</button></div>`
+        : '<span class="no-contact">—</span>'}</td>
       <td><span class="mode-badge mode-${p.mode}">${p.mode}</span></td>
       <td class="muted">${new Date(p.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
       <td class="muted device">${p.deviceId.slice(0, 8)}…</td>
@@ -389,10 +391,30 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
     td.plays { font-variant-numeric: tabular-nums; color: var(--text2); font-weight: 600; }
     td.muted { color: var(--text2); font-size: 12px; }
     td.device { font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace; font-size: 11px; color: var(--text3); }
+    .contact-cell { display: flex; align-items: center; gap: 6px; }
     .contact-tag {
       display: inline-block; background: var(--raised);
       border: 1px solid var(--border); border-radius: 5px;
       padding: 2px 9px; font-size: 12px; color: var(--text);
+    }
+    .copy-btn {
+      position: relative;
+      display: inline-flex; align-items: center;
+      padding: 2px 7px; border-radius: 4px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--text3); font-size: 11px; font-weight: 500;
+      cursor: pointer; font-family: inherit; flex-shrink: 0;
+      transition: background 0.1s, color 0.1s, border-color 0.1s;
+    }
+    .copy-btn:hover { background: var(--raised); color: var(--text2); border-color: #4a4a4a; }
+    .copy-btn.copied { color: var(--green); border-color: var(--green); }
+    .copy-tooltip {
+      position: fixed; z-index: 9999;
+      background: #1a1a1a; color: #4ade80;
+      border: 1px solid #4ade80; border-radius: 5px;
+      padding: 3px 9px; font-size: 11px; white-space: nowrap;
+      pointer-events: none; font-family: inherit;
+      transition: opacity 0.15s;
     }
     .no-contact { color: var(--text3); }
     .mode-badge {
@@ -408,6 +430,25 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
       display: flex; align-items: center; justify-content: space-between;
       flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text3);
     }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.65);
+      display: flex; align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .modal {
+      background: #202020;
+      border: 1px solid #3a3a3a;
+      border-radius: 12px;
+      padding: 28px;
+      width: 100%; max-width: 420px;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.5);
+    }
+    .modal-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .modal-body  { font-size: 14px; color: var(--text2); line-height: 1.6; margin-bottom: 24px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
   </style>
 </head>
 <body>
@@ -517,7 +558,48 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
 
   </div>
 
+  <!-- Modal -->
+  <div class="modal-overlay" id="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <p class="modal-title" id="modal-title"></p>
+      <p class="modal-body"  id="modal-body"></p>
+      <div class="modal-actions">
+        <button class="btn" id="modal-cancel">Cancel</button>
+        <button class="btn" id="modal-confirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+
   <script>
+    function copyContact(val, btn) {
+      function showFeedback() {
+        btn.classList.add('copied');
+        setTimeout(function() { btn.classList.remove('copied'); }, 1500);
+        var tip = document.createElement('div');
+        tip.className = 'copy-tooltip';
+        tip.textContent = 'Copied!';
+        tip.style.opacity = '0';
+        document.body.appendChild(tip);
+        var r = btn.getBoundingClientRect();
+        tip.style.left = (r.left + r.width / 2 - tip.offsetWidth / 2) + 'px';
+        tip.style.top  = (r.top - tip.offsetHeight - 6) + 'px';
+        requestAnimationFrame(function() { tip.style.opacity = '1'; });
+        setTimeout(function() {
+          tip.style.opacity = '0';
+          setTimeout(function() { document.body.removeChild(tip); }, 200);
+        }, 1300);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(val).then(showFeedback).catch(function() {});
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = val; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); showFeedback(); } catch(e) {}
+        document.body.removeChild(ta);
+      }
+    }
+
     function filterTable(q) {
       const rows = document.querySelectorAll('#table-body tr');
       const s = q.toLowerCase();
@@ -526,23 +608,73 @@ function html({ players, tapTotals, topTappers, totalPlayers, withContact, avgSc
       });
     }
 
-    async function toggleComp(action, btn) {
-      if (action === 'close' && !confirm('Close the competition? Players will not be able to submit scores until you reopen it.')) return;
-      btn.disabled = true;
+    function closeModal() {
+      document.getElementById('modal-overlay').style.display = 'none';
+    }
+
+    function openModal({ title, body, confirmLabel, confirmCls, cancelLabel, onConfirm }) {
+      document.getElementById('modal-title').textContent = title;
+      document.getElementById('modal-body').textContent  = body;
+
+      var confirmBtn = document.getElementById('modal-confirm');
+      var cancelBtn  = document.getElementById('modal-cancel');
+
+      confirmBtn.textContent = confirmLabel || 'OK';
+      confirmBtn.className   = 'btn ' + (confirmCls || '');
+      confirmBtn.onclick     = function() { closeModal(); if (onConfirm) onConfirm(); };
+
+      if (cancelLabel === false) {
+        cancelBtn.style.display = 'none';
+      } else {
+        cancelBtn.style.display = '';
+        cancelBtn.textContent   = cancelLabel || 'Cancel';
+        cancelBtn.onclick       = closeModal;
+      }
+
+      document.getElementById('modal-overlay').style.display = 'flex';
+    }
+
+    function toggleComp(action, btn) {
+      if (action === 'close') {
+        openModal({
+          title:        'Close Competition',
+          body:         'Players will not be able to submit scores until you reopen it. Are you sure?',
+          confirmLabel: 'Close Competition',
+          confirmCls:   'btn-red',
+          cancelLabel:  'Cancel',
+          onConfirm:    function() { doToggle(action, btn); },
+        });
+      } else {
+        doToggle(action, btn);
+      }
+    }
+
+    async function doToggle(action, btn) {
+      btn.disabled    = true;
       btn.textContent = action === 'close' ? 'Closing…' : 'Opening…';
       try {
-        const r = await fetch('/admin/competition/' + action, { method: 'POST' });
-        const data = await r.json();
+        var r    = await fetch('/admin/competition/' + action, { method: 'POST' });
+        var data = await r.json();
         if (r.ok && data.ok) {
           location.reload();
         } else {
-          alert('Error: ' + (data.error || r.status));
-          btn.disabled = false;
+          openModal({
+            title:        'Error',
+            body:         data.error || ('Unexpected error (' + r.status + ')'),
+            confirmLabel: 'OK',
+            cancelLabel:  false,
+          });
+          btn.disabled    = false;
           btn.textContent = action === 'close' ? 'Close Competition' : 'Open Competition';
         }
       } catch (e) {
-        alert('Network error — please try again.');
-        btn.disabled = false;
+        openModal({
+          title:        'Network Error',
+          body:         'Could not reach the server. Please check your connection and try again.',
+          confirmLabel: 'OK',
+          cancelLabel:  false,
+        });
+        btn.disabled    = false;
         btn.textContent = action === 'close' ? 'Close Competition' : 'Open Competition';
       }
     }
